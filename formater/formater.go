@@ -4,7 +4,9 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -43,7 +45,8 @@ func parseJSON(readers [][]string) map[string]interface{} {
 			emails = append(emails, strings.Split(reader[0], "@")[1])
 		}
 	}
-	recordMap["valid-domains"] = emails
+
+	recordMap["totalValidEmails"] = len(emails)
 	categories := make(map[string]int)
 
 	for _, email := range emails {
@@ -54,15 +57,43 @@ func parseJSON(readers [][]string) map[string]interface{} {
 		}
 	}
 	recordMap["categories"] = categories
+	validDomains := []string{}
+	for k := range categories {
+		validDomains = append(validDomains, k)
+	}
+	recordMap["valid-domains"] = validDomains
 	return recordMap
 }
 
 func parseCSV(readers [][]string) map[string]interface{} {
 	recordMap := make(map[string]interface{})
+	url := "https://cloudflare-dns.com/dns-query?name=%s&type=AAAA"
 	validEmails := regexp.MustCompile(`[a-zA-Z0-9]+@[a-zA-Z0-9\.]+\.[a-zA-Z0-9]+`)
 	csvData := [][]string{{"Emails"}}
+	// client := http.Client{
+	// 	Timeout: time.Duration(15 * time.Second),
+	// }
+
 	for _, reader := range readers {
 		if validEmails.MatchString(reader[0]) {
+			// request, err := http.NewRequest("GET", fmt.Sprintf(url, strings.Split(reader[0], "@")[1]), nil)
+			resp, err := http.Get(fmt.Sprintf(url, strings.Split(reader[0], "@")[1]))
+			if err != nil {
+				log.Println(err)
+			}
+			// request.Header.Set("Content-type", "application/dns-json")
+			// resp, err := client.Do(request)
+			// if err != nil {
+			// 	log.Println(err)
+			// }
+			// var result map[string]interface{}
+			// json.NewDecoder(resp.Body).Decode(&result)
+			defer resp.Body.Close()
+			_, err = ioutil.ReadAll(resp.Body)
+			if err != nil {
+				log.Println(err)
+			}
+			// log.Println(string(body))
 			csvData = append(csvData, reader)
 		}
 	}
@@ -83,6 +114,7 @@ func processFile(fileData *inputFile, writerStream chan<- map[string]interface{}
 		log.Fatal(err)
 	}
 	readersData, err := reader.ReadAll()
+
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -132,7 +164,7 @@ func Run(filePath string, extended bool) {
 		log.Fatal(err)
 	}
 	cmdInput := newInputFile(filePath, extended)
-	processFile(cmdInput, validEmailStreams)
+	go processFile(cmdInput, validEmailStreams)
 	for validEmail := range validEmailStreams {
 		writeFile(filePath, validEmail, extended)
 	}
